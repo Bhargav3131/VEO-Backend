@@ -10,6 +10,8 @@ CORS(app)
 
 # Store videos by task ID (instance-specific)
 video_results = {}
+# Map our task_id to actual_task_id from Kie.ai
+task_id_mapping = {}
 video_history = []
 HISTORY_FILE = 'video_history.json'
 
@@ -78,6 +80,11 @@ def generate_video():
             # Store the actual task ID from Veo API
             actual_task_id = veo_response.get("data", {}).get("taskId", task_id)
             video_results[task_id]["actual_task_id"] = actual_task_id
+            
+            # Create mapping for callback lookup
+            task_id_mapping[actual_task_id] = task_id
+            
+            print(f"Task created: {task_id} -> actual: {actual_task_id}")
             
             return jsonify({
                 "code": 200,
@@ -163,11 +170,29 @@ def get_video_status(task_id):
 def video_callback():
     """Handle Veo 3.1 API callback when video is ready"""
     data = request.json
+    
+    print(f"=== CALLBACK RECEIVED ===")
+    print(f"Full callback data: {json.dumps(data, indent=2)}")
+    
+    # Try to find task_id from callback
     task_id = data.get('taskId')
+    
+    # If not found, try actual_task_id
+    if not task_id:
+        task_id = data.get('actualTaskId')
+    
+    # If still not found, try to match with our mapping
+    if not task_id:
+        # Check if any actual_task_id matches
+        for actual_id, our_id in task_id_mapping.items():
+            if actual_id in str(data):
+                task_id = our_id
+                print(f"Found mapping: {actual_id} -> {task_id}")
+                break
+    
     video_url = data.get('videoUrl')
     status = data.get('status', 'completed')
     
-    print(f"=== CALLBACK RECEIVED ===")
     print(f"Task ID: {task_id}")
     print(f"Video URL: {video_url}")
     print(f"Status: {status}")
@@ -183,6 +208,7 @@ def video_callback():
             print(f"Video failed: {task_id} -> {data.get('error', 'Unknown error')}")
     else:
         print(f"Task ID not found in video_results: {task_id}")
+        print(f"Available task IDs: {list(video_results.keys())}")
     
     return jsonify({'status': 'ok'}), 200
 
@@ -206,8 +232,9 @@ def get_history():
 @app.route('/api/reset', methods=['POST'])
 def reset_videos():
     """Reset video results (for new generation)"""
-    global video_results
+    global video_results, task_id_mapping
     video_results = {}
+    task_id_mapping = {}
     print("Backend reset: video_results cleared")
     return jsonify({'status': 'reset'}), 200
 
