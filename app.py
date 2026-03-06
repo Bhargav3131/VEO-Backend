@@ -9,48 +9,44 @@ import uuid
 app = Flask(__name__)
 CORS(app)
 
-# Store videos by task ID
-video_results = {}
+# ================= STORAGE =================
 
-# Map our task_id to actual_task_id from Kie.ai
+video_results = {}
 task_id_mapping = {}
 
 video_history = []
-HISTORY_FILE = 'video_history.json'
+HISTORY_FILE = "video_history.json"
 
-# Kie.ai API Configuration
+# ================= CONFIG =================
+
 KIE_API_KEY = "416127f06c4433f3aac9ea71c9e81ffc"
 KIE_API_BASE = "https://api.kie.ai"
 
-
-# ---------------- HISTORY FUNCTIONS ----------------
+# ================= HISTORY =================
 
 def load_history():
     if os.path.exists(HISTORY_FILE):
-        with open(HISTORY_FILE, 'r') as f:
+        with open(HISTORY_FILE, "r") as f:
             try:
                 return json.load(f)
             except:
                 return []
     return []
 
-
 def save_history_to_file(history):
-    with open(HISTORY_FILE, 'w') as f:
+    with open(HISTORY_FILE, "w") as f:
         json.dump(history, f)
-
 
 video_history = load_history()
 
+# ================= GENERATE VIDEO =================
 
-# ---------------- GENERATE VIDEO ----------------
-
-@app.route('/api/veo/generate', methods=['POST'])
+@app.route("/api/veo/generate", methods=["POST"])
 def generate_video():
 
     data = request.json
 
-    # safer unique task id
+    # Unique ID (fixes multi-video bug)
     task_id = f"veo_task_{uuid.uuid4().hex}"
 
     video_results[task_id] = {
@@ -69,7 +65,7 @@ def generate_video():
         }), 400
 
     veo_request = {
-        "prompt": data.get("prompt", ""),
+        "prompt": data.get("prompt"),
         "imageUrls": image_urls,
         "model": data.get("model", "veo3_fast"),
         "generationType": data.get("generationType", "FIRST_AND_LAST_FRAMES_2_VIDEO"),
@@ -96,6 +92,7 @@ def generate_video():
             actual_task_id = veo_response.get("data", {}).get("taskId")
 
             video_results[task_id]["actual_task_id"] = actual_task_id
+
             task_id_mapping[actual_task_id] = task_id
 
             print(f"Task created: {task_id} -> {actual_task_id}")
@@ -106,12 +103,11 @@ def generate_video():
                 "data": {
                     "taskId": task_id
                 }
-            }), 200
+            })
 
         else:
 
             video_results[task_id]["status"] = "failed"
-            video_results[task_id]["error"] = veo_response.get("msg")
 
             return jsonify({
                 "code": response.status_code,
@@ -128,10 +124,9 @@ def generate_video():
             "msg": str(e)
         }), 500
 
+# ================= CHECK STATUS =================
 
-# ---------------- POLLING STATUS ----------------
-
-@app.route('/api/veo/status/<task_id>', methods=['GET'])
+@app.route("/api/veo/status/<task_id>", methods=["GET"])
 def get_video_status(task_id):
 
     if task_id not in video_results:
@@ -162,11 +157,12 @@ def get_video_status(task_id):
 
         k_data = k_response.json()
 
-        print("=== KIE STATUS RESPONSE ===")
+        print("==== KIE STATUS RESPONSE ====")
         print(json.dumps(k_data, indent=2))
 
         code = k_data.get("code")
 
+        # ===== VIDEO READY =====
         if code == 200:
 
             result_json = k_data.get("data", {}).get("resultJson", "{}")
@@ -187,12 +183,14 @@ def get_video_status(task_id):
             video_results[task_id]["videoUrl"] = video_url
             video_results[task_id]["completed_at"] = datetime.now().isoformat()
 
-            print(f"Video completed: {video_url}")
+            print("Video ready:", video_url)
 
+        # ===== STILL PROCESSING =====
         elif code == 400:
 
             video_results[task_id]["status"] = "processing"
 
+        # ===== FAILED =====
         elif code == 501:
 
             video_results[task_id]["status"] = "failed"
@@ -207,10 +205,9 @@ def get_video_status(task_id):
 
         return jsonify(video_results[task_id])
 
+# ================= CALLBACK =================
 
-# ---------------- CALLBACK ----------------
-
-@app.route('/api/veo/callback', methods=['POST'])
+@app.route("/api/veo/callback", methods=["POST"])
 def video_callback():
 
     data = request.json
@@ -222,9 +219,9 @@ def video_callback():
     task_id = None
 
     if "taskId" in data:
-        task_id = data["taskId"]
+        task_id = data.get("taskId")
 
-    if not video_url and "data" in data:
+    if "data" in data:
 
         result_json = data.get("data", {}).get("resultJson", "{}")
 
@@ -244,14 +241,13 @@ def video_callback():
         video_results[task_id]["videoUrl"] = video_url
         video_results[task_id]["completed_at"] = datetime.now().isoformat()
 
-        print("Video stored from callback")
+        print("Video saved from callback")
 
     return jsonify({"status": "ok"})
 
+# ================= SAVE HISTORY =================
 
-# ---------------- HISTORY ----------------
-
-@app.route('/api/saveHistory', methods=['POST'])
+@app.route("/api/saveHistory", methods=["POST"])
 def save_history():
 
     data = request.json
@@ -268,20 +264,22 @@ def save_history():
 
         save_history_to_file(video_history)
 
+        print("Saved to history:", url)
+
     return jsonify({"status": "ok"})
 
+# ================= GET HISTORY =================
 
-@app.route('/api/history', methods=['GET'])
+@app.route("/api/history", methods=["GET"])
 def get_history():
 
     return jsonify({
         "history": video_history
     })
 
+# ================= RESET =================
 
-# ---------------- RESET ----------------
-
-@app.route('/api/reset', methods=['POST'])
+@app.route("/api/reset", methods=["POST"])
 def reset_videos():
 
     global video_results, task_id_mapping
@@ -289,10 +287,11 @@ def reset_videos():
     video_results = {}
     task_id_mapping = {}
 
+    print("Backend reset")
+
     return jsonify({"status": "reset"})
 
-
-# ---------------- RUN SERVER ----------------
+# ================= RUN SERVER =================
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
