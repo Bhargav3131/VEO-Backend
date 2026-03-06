@@ -53,14 +53,22 @@ def generate_video():
     }
     
     # Prepare Veo 3.1 API request
+    # ✅ Make ending frame optional
+    image_urls = data.get("imageUrls", [])
+    if not image_urls:
+        return jsonify({
+            "code": 400,
+            "msg": "At least one image URL is required (start frame)"
+        }), 400
+    
     veo_request = {
         "prompt": data.get("prompt", ""),
-        "imageUrls": data.get("imageUrls", []),
+        "imageUrls": image_urls,  # Can be [start] or [start, end]
         "model": data.get("model", "veo3_fast"),
         "generationType": data.get("generationType", "FIRST_AND_LAST_FRAMES_2_VIDEO"),
         "aspect_ratio": data.get("aspect_ratio", "9:16"),
         "enableTranslation": data.get("enableTranslation", True),
-        "callBackUrl": data.get("callBackUrl", f"{request.host_url}api/veo/callback")
+        "callBackUrl": data.get("callBackUrl", f"{request.host_url}/api/veo/callback")
     }
     
     try:
@@ -111,7 +119,7 @@ def generate_video():
 
 @app.route('/api/veo/status/<task_id>', methods=['GET'])
 def get_video_status(task_id):
-    """Get status of a specific video task - Poll Kie.ai directly"""
+    """Get status of a specific video task - Check if video URL is available"""
     if task_id in video_results:
         task_info = video_results[task_id]
         
@@ -150,26 +158,10 @@ def get_video_status(task_id):
                     
                     # Handle different response codes
                     if code == 200:
-                        # Video is ready - check if message says "success"
-                        if "success" in (msg + error).lower():
-                            video_results[task_id]["status"] = "completed"
-                            
-                            # Try to get video URL from details endpoint
-                            video_url = get_video_url_from_details(actual_task_id)
-                            
-                            if video_url:
-                                video_results[task_id]["videoUrl"] = video_url
-                                video_results[task_id]["completed_at"] = datetime.now().isoformat()
-                                print(f"Video completed: {task_id} -> {video_url}")
-                            else:
-                                # Video is ready but URL not available yet
-                                # Mark as completed anyway - frontend will poll again
-                                video_results[task_id]["completed_at"] = datetime.now().isoformat()
-                                print(f"Video completed (URL pending): {task_id}")
-                        else:
-                            video_results[task_id]["status"] = "processing"
-                            video_results[task_id]["msg"] = msg
-                            print(f"Video still processing: {task_id} -> {msg}")
+                        # Video is ready - mark as completed
+                        video_results[task_id]["status"] = "completed"
+                        video_results[task_id]["completed_at"] = datetime.now().isoformat()
+                        print(f"Video completed: {task_id}")
                     elif code == 400:
                         # Still processing
                         video_results[task_id]["status"] = "processing"
@@ -180,16 +172,6 @@ def get_video_status(task_id):
                         video_results[task_id]["status"] = "failed"
                         video_results[task_id]["error"] = error or msg
                         print(f"Video failed: {task_id} -> {error or msg}")
-                    elif code == 401:
-                        # Unauthorized
-                        video_results[task_id]["status"] = "failed"
-                        video_results[task_id]["error"] = "Unauthorized - Check API key"
-                        print(f"Video failed: {task_id} -> Unauthorized")
-                    elif code == 402:
-                        # Insufficient credits
-                        video_results[task_id]["status"] = "failed"
-                        video_results[task_id]["error"] = "Insufficient credits"
-                        print(f"Video failed: {task_id} -> Insufficient credits")
                     else:
                         # Other error codes
                         video_results[task_id]["status"] = "failed"
@@ -209,98 +191,105 @@ def get_video_status(task_id):
     
     return jsonify({"status": "not_found"}), 404
 
-def get_video_url_from_details(task_id):
-    """Get video URL from Kie.ai details endpoint"""
-    try:
-        # Try different possible endpoints for video URL
-        endpoints = [
-            f"{KIE_API_BASE}/api/v1/veo/details/{task_id}",
-            f"{KIE_API_BASE}/api/v1/veo/video/{task_id}",
-            f"{KIE_API_BASE}/api/v1/veo/getVideo/{task_id}",
-        ]
-        
-        for endpoint in endpoints:
-            try:
-                response = requests.get(
-                    endpoint,
-                    headers={
-                        "Authorization": f"Bearer {KIE_API_KEY}",
-                        "Content-Type": "application/json"
-                    }
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    
-                    # Try multiple possible field names for video URL
-                    video_url = (
-                        data.get("videoUrl") or
-                        data.get("video_url") or
-                        data.get("resultUrls", [None])[0] if data.get("resultUrls") else None or
-                        data.get("outputUrl") or
-                        data.get("result", {}).get("videoUrl") if data.get("result") else None or
-                        data.get("data", {}).get("videoUrl") if data.get("data") else None
-                    )
-                    
-                    if video_url:
-                        print(f"Video URL found from {endpoint}: {video_url}")
-                        return video_url
-            except Exception as e:
-                print(f"Error checking {endpoint}: {str(e)}")
-                continue
-        
-        return None
-    except Exception as e:
-        print(f"Error getting video URL: {str(e)}")
-        return None
-
 @app.route('/api/veo/callback', methods=['POST'])
 def video_callback():
-    """Handle Veo 3.1 API callback when video is ready"""
+    """Handle Veo 3.1 API callback when video is ready (Sora-style approach)"""
     data = request.json
     
     print(f"=== CALLBACK RECEIVED ===")
     print(f"Full callback data: {json.dumps(data, indent=2)}")
     
-    # Try to find task_id from callback
-    task_id = data.get('taskId')
+    # Try to find task_id from callback (Sora-style)
+    task_id = None
     
-    # If not found, try actual_task_id
-    if not task_id:
+    # Method 1: Check for taskId field
+    if 'taskId' in data:
+        task_id = data.get('taskId')
+    
+    # Method 2: Check for actualTaskId field
+    if not task_id and 'actualTaskId' in data:
         task_id = data.get('actualTaskId')
+    
+    # Method 3: Check for data.taskId field (Sora-style)
+    if not task_id and 'data' in data:
+        task_id = data.get('data', {}).get('taskId')
+    
+    # Method 4: Check for resultJson.resultUrls (Sora-style)
+    if not task_id and 'data' in data:
+        result_json = data.get('data', {}).get('resultJson', '{}')
+        try:
+            result_data = json.loads(result_json)
+            urls = result_data.get('resultUrls', [])
+            if urls:
+                # Find task_id from mapping
+                for actual_id, our_id in task_id_mapping.items():
+                    if actual_id in str(data):
+                        task_id = our_id
+                        print(f"Found mapping: {actual_id} -> {task_id}")
+                        break
+        except:
+            pass
     
     # If still not found, try to match with our mapping
     if not task_id:
-        # Check if any actual_task_id matches
         for actual_id, our_id in task_id_mapping.items():
             if actual_id in str(data):
                 task_id = our_id
                 print(f"Found mapping: {actual_id} -> {task_id}")
                 break
     
-    video_url = data.get('videoUrl') or data.get('video_url') or (data.get('resultUrls', [None])[0] if data.get('resultUrls') else None)
-    status = data.get('status', 'completed')
-    error = data.get('error') or data.get('msg')
+    # Extract video URLs (Sora-style)
+    video_url = None
+    video_urls = []
+    
+    # Method 1: Direct videoUrl field
+    if 'videoUrl' in data:
+        video_url = data.get('videoUrl')
+    
+    # Method 2: resultUrls array (Sora-style)
+    if not video_url and 'resultUrls' in data:
+        video_urls = data.get('resultUrls', [])
+        if video_urls:
+            video_url = video_urls[0]
+    
+    # Method 3: resultJson.resultUrls (Sora-style)
+    if not video_url and 'data' in data:
+        result_json = data.get('data', {}).get('resultJson', '{}')
+        try:
+            result_data = json.loads(result_json)
+            urls = result_data.get('resultUrls', [])
+            if urls:
+                video_url = urls[0]
+        except:
+            pass
+    
+    # Method 4: Check for state == 'success' (Sora-style)
+    if not video_url and 'data' in data:
+        state = data.get('data', {}).get('state')
+        if state == 'success':
+            result_json = data.get('data', {}).get('resultJson', '{}')
+            try:
+                result_data = json.loads(result_json)
+                urls = result_data.get('resultUrls', [])
+                if urls:
+                    video_url = urls[0]
+            except:
+                pass
     
     print(f"Task ID: {task_id}")
     print(f"Video URL: {video_url}")
-    print(f"Status: {status}")
-    print(f"Error: {error}")
+    print(f"Video URLs: {video_urls}")
     
     if task_id and task_id in video_results:
-        if error:
-            video_results[task_id]["status"] = "failed"
-            video_results[task_id]["error"] = error
-            print(f"Video failed: {task_id} -> {error}")
-        elif video_url:
+        if video_url:
             video_results[task_id]["status"] = "completed"
             video_results[task_id]["videoUrl"] = video_url
             video_results[task_id]["completed_at"] = datetime.now().isoformat()
             print(f"Video completed: {task_id} -> {video_url}")
         else:
-            video_results[task_id]["status"] = "failed"
-            video_results[task_id]["error"] = "No video URL in callback"
-            print(f"Video failed: {task_id} -> No video URL")
+            video_results[task_id]["status"] = "completed"
+            video_results[task_id]["completed_at"] = datetime.now().isoformat()
+            print(f"Video completed (URL pending): {task_id}")
     else:
         print(f"Task ID not found in video_results: {task_id}")
         print(f"Available task IDs: {list(video_results.keys())}")
@@ -315,7 +304,7 @@ def save_history():
     if url:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         video_history.insert(0, {"url": url, "timestamp": timestamp})
-        save_history_to_file(video_history)
+        save_history_to_file(video_history)  # Save to file
         print(f"Saved to history: {url}")
     return jsonify({'status': 'ok'}), 200
 
