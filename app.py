@@ -19,7 +19,7 @@ video_history = []
 HISTORY_FILE = 'video_history.json'
 
 # Kie.ai API Configuration
-KIE_API_KEY = "YOUR_KIE_API_KEY"
+KIE_API_KEY = "416127f06c4433f3aac9ea71c9e81ffc"
 KIE_API_BASE = "https://api.kie.ai"
 
 
