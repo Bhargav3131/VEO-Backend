@@ -150,19 +150,26 @@ def get_video_status(task_id):
                     
                     # Handle different response codes
                     if code == 200:
-                        # Video is ready - now get the video URL from details endpoint
-                        video_url = get_video_url_from_details(actual_task_id)
-                        
-                        if video_url:
+                        # Video is ready - check if message says "success"
+                        if "success" in (msg + error).lower():
                             video_results[task_id]["status"] = "completed"
-                            video_results[task_id]["videoUrl"] = video_url
-                            video_results[task_id]["completed_at"] = datetime.now().isoformat()
-                            print(f"Video completed: {task_id} -> {video_url}")
+                            
+                            # Try to get video URL from details endpoint
+                            video_url = get_video_url_from_details(actual_task_id)
+                            
+                            if video_url:
+                                video_results[task_id]["videoUrl"] = video_url
+                                video_results[task_id]["completed_at"] = datetime.now().isoformat()
+                                print(f"Video completed: {task_id} -> {video_url}")
+                            else:
+                                # Video is ready but URL not available yet
+                                # Mark as completed anyway - frontend will poll again
+                                video_results[task_id]["completed_at"] = datetime.now().isoformat()
+                                print(f"Video completed (URL pending): {task_id}")
                         else:
-                            # If no video URL but message says success, try callback
                             video_results[task_id]["status"] = "processing"
-                            video_results[task_id]["msg"] = "Waiting for callback with video URL"
-                            print(f"Video processing (waiting for callback): {task_id}")
+                            video_results[task_id]["msg"] = msg
+                            print(f"Video still processing: {task_id} -> {msg}")
                     elif code == 400:
                         # Still processing
                         video_results[task_id]["status"] = "processing"
