@@ -46,7 +46,8 @@ def generate_video():
     video_results[task_id] = {
         "status": "processing",
         "task_id": task_id,
-        "created_at": datetime.now().isoformat()
+        "created_at": datetime.now().isoformat(),
+        "actual_task_id": None
     }
     
     # Prepare Veo 3.1 API request
@@ -103,9 +104,59 @@ def generate_video():
 
 @app.route('/api/veo/status/<task_id>', methods=['GET'])
 def get_video_status(task_id):
-    """Get status of a specific video task"""
+    """Get status of a specific video task - Poll Kie.ai directly"""
     if task_id in video_results:
-        return jsonify(video_results[task_id]), 200
+        task_info = video_results[task_id]
+        
+        # If already completed, return cached result
+        if task_info.get("status") == "completed":
+            return jsonify(task_info), 200
+        
+        # If failed, return cached result
+        if task_info.get("status") == "failed":
+            return jsonify(task_info), 200
+        
+        # If we have an actual_task_id, poll Kie.ai directly
+        actual_task_id = task_info.get("actual_task_id")
+        if actual_task_id:
+            try:
+                # Poll Kie.ai's API directly
+                k_response = requests.get(
+                    f"{KIE_API_BASE}/api/v1/veo/status/{actual_task_id}",
+                    headers={
+                        "Authorization": f"Bearer {KIE_API_KEY}",
+                        "Content-Type": "application/json"
+                    }
+                )
+                
+                if k_response.status_code == 200:
+                    k_data = k_response.json()
+                    
+                    # Update our cache with Kie.ai's response
+                    if k_data.get("status") == "completed":
+                        video_results[task_id]["status"] = "completed"
+                        video_results[task_id]["videoUrl"] = k_data.get("videoUrl")
+                        video_results[task_id]["completed_at"] = datetime.now().isoformat()
+                        print(f"Video completed via direct poll: {task_id} -> {k_data.get('videoUrl')}")
+                    elif k_data.get("status") == "failed":
+                        video_results[task_id]["status"] = "failed"
+                        video_results[task_id]["error"] = k_data.get("error", "Unknown error")
+                        print(f"Video failed via direct poll: {task_id} -> {k_data.get('error')}")
+                    else:
+                        video_results[task_id]["status"] = "processing"
+                        print(f"Video still processing: {task_id}")
+                    
+                    return jsonify(video_results[task_id]), 200
+                    
+            except Exception as e:
+                print(f"Error polling Kie.ai: {str(e)}")
+                video_results[task_id]["status"] = "failed"
+                video_results[task_id]["error"] = str(e)
+                return jsonify(video_results[task_id]), 200
+        
+        # Return current status if no actual_task_id
+        return jsonify(task_info), 200
+    
     return jsonify({"status": "not_found"}), 404
 
 @app.route('/api/veo/callback', methods=['POST'])
