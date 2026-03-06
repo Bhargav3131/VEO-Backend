@@ -139,16 +139,35 @@ def get_video_status(task_id):
                 if k_response.status_code == 200:
                     k_data = k_response.json()
                     
+                    # DEBUG: Log the full response
+                    print(f"=== Kie.ai Response ===")
+                    print(json.dumps(k_data, indent=2))
+                    
                     # Update our cache with Kie.ai's response
                     if k_data.get("status") == "completed":
                         video_results[task_id]["status"] = "completed"
-                        video_results[task_id]["videoUrl"] = k_data.get("videoUrl")
-                        video_results[task_id]["completed_at"] = datetime.now().isoformat()
-                        print(f"Video completed via direct poll: {task_id} -> {k_data.get('videoUrl')}")
+                        
+                        # Try multiple possible field names for video URL
+                        video_url = (
+                            k_data.get("videoUrl") or
+                            k_data.get("video_url") or
+                            k_data.get("resultUrls", [None])[0] or
+                            k_data.get("outputUrl") or
+                            k_data.get("result", {}).get("videoUrl") or
+                            k_data.get("data", {}).get("videoUrl")
+                        )
+                        
+                        if video_url:
+                            video_results[task_id]["videoUrl"] = video_url
+                            video_results[task_id]["completed_at"] = datetime.now().isoformat()
+                            print(f"Video completed: {task_id} -> {video_url}")
+                        else:
+                            video_results[task_id]["error"] = "Video URL not found in response"
+                            print(f"Video completed but URL not found: {task_id}")
                     elif k_data.get("status") == "failed":
                         video_results[task_id]["status"] = "failed"
-                        video_results[task_id]["error"] = k_data.get("error", "Unknown error")
-                        print(f"Video failed via direct poll: {task_id} -> {k_data.get('error')}")
+                        video_results[task_id]["error"] = k_data.get("error", k_data.get("msg", "Unknown error"))
+                        print(f"Video failed: {task_id} -> {video_results[task_id]['error']}")
                     else:
                         video_results[task_id]["status"] = "processing"
                         print(f"Video still processing: {task_id}")
@@ -190,7 +209,7 @@ def video_callback():
                 print(f"Found mapping: {actual_id} -> {task_id}")
                 break
     
-    video_url = data.get('videoUrl')
+    video_url = data.get('videoUrl') or data.get('video_url') or data.get('resultUrls', [None])[0]
     status = data.get('status', 'completed')
     
     print(f"Task ID: {task_id}")
