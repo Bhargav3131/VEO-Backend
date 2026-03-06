@@ -143,18 +143,23 @@ def get_video_status(task_id):
                     print(f"=== Kie.ai Response ===")
                     print(json.dumps(k_data, indent=2))
                     
-                    # Update our cache with Kie.ai's response
-                    if k_data.get("status") == "completed":
+                    # Check the CODE field (not status field!)
+                    code = k_data.get("code", 200)
+                    msg = k_data.get("msg", "")
+                    
+                    # Handle different response codes
+                    if code == 200:
+                        # Video is ready
                         video_results[task_id]["status"] = "completed"
                         
                         # Try multiple possible field names for video URL
                         video_url = (
                             k_data.get("videoUrl") or
                             k_data.get("video_url") or
-                            k_data.get("resultUrls", [None])[0] or
+                            k_data.get("resultUrls", [None])[0] if k_data.get("resultUrls") else None or
                             k_data.get("outputUrl") or
-                            k_data.get("result", {}).get("videoUrl") or
-                            k_data.get("data", {}).get("videoUrl")
+                            k_data.get("result", {}).get("videoUrl") if k_data.get("result") else None or
+                            k_data.get("data", {}).get("videoUrl") if k_data.get("data") else None
                         )
                         
                         if video_url:
@@ -163,14 +168,33 @@ def get_video_status(task_id):
                             print(f"Video completed: {task_id} -> {video_url}")
                         else:
                             video_results[task_id]["error"] = "Video URL not found in response"
+                            video_results[task_id]["status"] = "failed"
                             print(f"Video completed but URL not found: {task_id}")
-                    elif k_data.get("status") == "failed":
-                        video_results[task_id]["status"] = "failed"
-                        video_results[task_id]["error"] = k_data.get("error", k_data.get("msg", "Unknown error"))
-                        print(f"Video failed: {task_id} -> {video_results[task_id]['error']}")
-                    else:
+                    elif code == 400:
+                        # Still processing (1080P is processing)
                         video_results[task_id]["status"] = "processing"
-                        print(f"Video still processing: {task_id}")
+                        video_results[task_id]["msg"] = msg
+                        print(f"Video still processing: {task_id} -> {msg}")
+                    elif code == 501:
+                        # Generation failed
+                        video_results[task_id]["status"] = "failed"
+                        video_results[task_id]["error"] = msg
+                        print(f"Video failed: {task_id} -> {msg}")
+                    elif code == 401:
+                        # Unauthorized
+                        video_results[task_id]["status"] = "failed"
+                        video_results[task_id]["error"] = "Unauthorized - Check API key"
+                        print(f"Video failed: {task_id} -> Unauthorized")
+                    elif code == 402:
+                        # Insufficient credits
+                        video_results[task_id]["status"] = "failed"
+                        video_results[task_id]["error"] = "Insufficient credits"
+                        print(f"Video failed: {task_id} -> Insufficient credits")
+                    else:
+                        # Other error codes
+                        video_results[task_id]["status"] = "failed"
+                        video_results[task_id]["error"] = msg or f"Error code: {code}"
+                        print(f"Video failed: {task_id} -> {msg or f'Error code: {code}'}")
                     
                     return jsonify(video_results[task_id]), 200
                     
@@ -209,22 +233,29 @@ def video_callback():
                 print(f"Found mapping: {actual_id} -> {task_id}")
                 break
     
-    video_url = data.get('videoUrl') or data.get('video_url') or data.get('resultUrls', [None])[0]
+    video_url = data.get('videoUrl') or data.get('video_url') or (data.get('resultUrls', [None])[0] if data.get('resultUrls') else None)
     status = data.get('status', 'completed')
+    error = data.get('error') or data.get('msg')
     
     print(f"Task ID: {task_id}")
     print(f"Video URL: {video_url}")
     print(f"Status: {status}")
+    print(f"Error: {error}")
     
     if task_id and task_id in video_results:
-        video_results[task_id]["status"] = status
-        if video_url:
+        if error:
+            video_results[task_id]["status"] = "failed"
+            video_results[task_id]["error"] = error
+            print(f"Video failed: {task_id} -> {error}")
+        elif video_url:
+            video_results[task_id]["status"] = "completed"
             video_results[task_id]["videoUrl"] = video_url
             video_results[task_id]["completed_at"] = datetime.now().isoformat()
             print(f"Video completed: {task_id} -> {video_url}")
         else:
-            video_results[task_id]["error"] = data.get('error', 'Unknown error')
-            print(f"Video failed: {task_id} -> {data.get('error', 'Unknown error')}")
+            video_results[task_id]["status"] = "failed"
+            video_results[task_id]["error"] = "No video URL in callback"
+            print(f"Video failed: {task_id} -> No video URL")
     else:
         print(f"Task ID not found in video_results: {task_id}")
         print(f"Available task IDs: {list(video_results.keys())}")
