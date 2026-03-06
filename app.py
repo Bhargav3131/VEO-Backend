@@ -146,40 +146,33 @@ def get_video_status(task_id):
                     # Check the CODE field (not status field!)
                     code = k_data.get("code", 200)
                     msg = k_data.get("msg", "")
+                    error = k_data.get("error", "")
                     
                     # Handle different response codes
                     if code == 200:
-                        # Video is ready
-                        video_results[task_id]["status"] = "completed"
-                        
-                        # Try multiple possible field names for video URL
-                        video_url = (
-                            k_data.get("videoUrl") or
-                            k_data.get("video_url") or
-                            k_data.get("resultUrls", [None])[0] if k_data.get("resultUrls") else None or
-                            k_data.get("outputUrl") or
-                            k_data.get("result", {}).get("videoUrl") if k_data.get("result") else None or
-                            k_data.get("data", {}).get("videoUrl") if k_data.get("data") else None
-                        )
+                        # Video is ready - now get the video URL from details endpoint
+                        video_url = get_video_url_from_details(actual_task_id)
                         
                         if video_url:
+                            video_results[task_id]["status"] = "completed"
                             video_results[task_id]["videoUrl"] = video_url
                             video_results[task_id]["completed_at"] = datetime.now().isoformat()
                             print(f"Video completed: {task_id} -> {video_url}")
                         else:
-                            video_results[task_id]["error"] = "Video URL not found in response"
-                            video_results[task_id]["status"] = "failed"
-                            print(f"Video completed but URL not found: {task_id}")
+                            # If no video URL but message says success, try callback
+                            video_results[task_id]["status"] = "processing"
+                            video_results[task_id]["msg"] = "Waiting for callback with video URL"
+                            print(f"Video processing (waiting for callback): {task_id}")
                     elif code == 400:
-                        # Still processing (1080P is processing)
+                        # Still processing
                         video_results[task_id]["status"] = "processing"
                         video_results[task_id]["msg"] = msg
                         print(f"Video still processing: {task_id} -> {msg}")
                     elif code == 501:
                         # Generation failed
                         video_results[task_id]["status"] = "failed"
-                        video_results[task_id]["error"] = msg
-                        print(f"Video failed: {task_id} -> {msg}")
+                        video_results[task_id]["error"] = error or msg
+                        print(f"Video failed: {task_id} -> {error or msg}")
                     elif code == 401:
                         # Unauthorized
                         video_results[task_id]["status"] = "failed"
@@ -193,8 +186,8 @@ def get_video_status(task_id):
                     else:
                         # Other error codes
                         video_results[task_id]["status"] = "failed"
-                        video_results[task_id]["error"] = msg or f"Error code: {code}"
-                        print(f"Video failed: {task_id} -> {msg or f'Error code: {code}'}")
+                        video_results[task_id]["error"] = msg or error or f"Error code: {code}"
+                        print(f"Video failed: {task_id} -> {msg or error or f'Error code: {code}'}")
                     
                     return jsonify(video_results[task_id]), 200
                     
@@ -208,6 +201,51 @@ def get_video_status(task_id):
         return jsonify(task_info), 200
     
     return jsonify({"status": "not_found"}), 404
+
+def get_video_url_from_details(task_id):
+    """Get video URL from Kie.ai details endpoint"""
+    try:
+        # Try different possible endpoints for video URL
+        endpoints = [
+            f"{KIE_API_BASE}/api/v1/veo/details/{task_id}",
+            f"{KIE_API_BASE}/api/v1/veo/video/{task_id}",
+            f"{KIE_API_BASE}/api/v1/veo/getVideo/{task_id}",
+        ]
+        
+        for endpoint in endpoints:
+            try:
+                response = requests.get(
+                    endpoint,
+                    headers={
+                        "Authorization": f"Bearer {KIE_API_KEY}",
+                        "Content-Type": "application/json"
+                    }
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    # Try multiple possible field names for video URL
+                    video_url = (
+                        data.get("videoUrl") or
+                        data.get("video_url") or
+                        data.get("resultUrls", [None])[0] if data.get("resultUrls") else None or
+                        data.get("outputUrl") or
+                        data.get("result", {}).get("videoUrl") if data.get("result") else None or
+                        data.get("data", {}).get("videoUrl") if data.get("data") else None
+                    )
+                    
+                    if video_url:
+                        print(f"Video URL found from {endpoint}: {video_url}")
+                        return video_url
+            except Exception as e:
+                print(f"Error checking {endpoint}: {str(e)}")
+                continue
+        
+        return None
+    except Exception as e:
+        print(f"Error getting video URL: {str(e)}")
+        return None
 
 @app.route('/api/veo/callback', methods=['POST'])
 def video_callback():
