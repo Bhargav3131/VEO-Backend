@@ -116,6 +116,11 @@ def video_callback():
     video_url = data.get('videoUrl')
     status = data.get('status', 'completed')
     
+    print(f"=== CALLBACK RECEIVED ===")
+    print(f"Task ID: {task_id}")
+    print(f"Video URL: {video_url}")
+    print(f"Status: {status}")
+    
     if task_id and task_id in video_results:
         video_results[task_id]["status"] = status
         if video_url:
@@ -125,6 +130,8 @@ def video_callback():
         else:
             video_results[task_id]["error"] = data.get('error', 'Unknown error')
             print(f"Video failed: {task_id} -> {data.get('error', 'Unknown error')}")
+    else:
+        print(f"Task ID not found in video_results: {task_id}")
     
     return jsonify({'status': 'ok'}), 200
 
